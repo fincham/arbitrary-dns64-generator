@@ -1,0 +1,92 @@
+#!/usr/bin/python3 -u
+
+"""
+A PowerDNS pipe backend which synthesizes IPv4-embedded AAAA records based on the hostname being queried. 
+Michael Fincham <michael@hotplate.co.nz>
+
+For example, a query of the form:
+
+    dig 192.0.2.1.dns64.example.com ANY
+
+Will produce the answer:
+
+    192.0.2.1.dns64.example.com. 60 IN   AAAA    64:ff9b::c000:201
+
+This can be useful when it is necessary to connect to a v4 literal for testing etc.
+"""
+
+import argparse
+import ipaddress
+import re
+import sys
+
+def format_data(qname, qtype, answer, ttl=60):
+        return '\t'.join([qname, 'IN', qtype, str(ttl), '1', answer])
+
+def send(answer_tag, answer_data=None):
+    if answer_data:
+        answer_data = "\t{}".format(answer_data)
+    else:
+        answer_data = ''
+    sys.stdout.write("{}{}\n".format(answer_tag, answer_data))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="\n".join(__doc__.splitlines(False)[1:3]),
+        epilog="\n".join(__doc__.splitlines(False)[3:])
+    )
+    parser.add_argument('zone', help="zone to answer queries for")
+    parser.add_argument('ns', metavar='soa-ns', help="the primary nameserver address to give in the SOA record")
+    parser.add_argument('contact', metavar='soa-contact', help="the contact address to give in the SOA record (in SOA format)")
+    parser.add_argument('prefix', help="IPv6 prefix in which to embed IPv4 addresses, defaults to 64:ff9b::", default="64:ff9b::", nargs='?')
+    args = parser.parse_args()
+    zone = args.zone
+    soa_ns = args.ns
+    soa_contact = args.contact.replace('@', '.') # just in case the address is given in non-SOA format
+    
+    try:
+        prefix = ipaddress.IPv6Address(args.prefix)
+    except:
+        send('LOG', "Invalid IPv6 prefix specified")
+        send('FAIL')
+        sys.exit(1)
+
+    # similarly, help the SOA parameters be more conformant
+    if not soa_ns.endswith('.'):
+        soa_ns += '.'
+
+    if not soa_contact.endswith('.'):
+        soa_contact += '.'
+
+    # used to ensure IPv4 addresses are vaguely correct before trying to parse them
+    vaguely_ipv4 = re.compile("^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$")
+
+    # handshake and accept version 1 of the ABI
+    query, version = sys.stdin.readline().strip().split()
+    if query != 'HELO' and version != '1':
+        send('FAIL')
+        sys.exit(1)
+    
+    send('OK','Hotplate arbitrary DNS64 generator')
+
+    # loop forever answering questions
+    while True:
+        try:
+            question_type, qname, qclass, qtype, id, remote_ip = sys.stdin.readline().strip().split()
+        except:
+            send('LOG','Malformed question')
+            send('FAIL')
+            continue
+    
+        # only answer queries for the configured zone
+        if question_type == 'Q' and qname.endswith(zone):
+            if qtype == "SOA":
+                send('DATA', format_data(qname, 'SOA', "{} {} 1 1800 3600 604800 3600".format(soa_ns, soa_contact)))
+            elif qtype in ('AAAA', 'ANY'):
+                requested_ip = qname[0:0-(len(zone)+1)]
+                if vaguely_ipv4.match(requested_ip):
+                    dns64_ip = str(ipaddress.IPv6Address(int(prefix) | int(ipaddress.ip_address(requested_ip))))
+                send('DATA', format_data(qname, 'AAAA', dns64_ip))
+
+        send('END')
