@@ -87,6 +87,6 @@ if __name__ == "__main__":
                 requested_ip = qname[0:0-(len(zone)+1)]
                 if vaguely_ipv4.match(requested_ip):
                     dns64_ip = str(ipaddress.IPv6Address(int(prefix) | int(ipaddress.ip_address(requested_ip))))
-                send('DATA', format_data(qname, 'AAAA', dns64_ip))
+                    send('DATA', format_data(qname, 'AAAA', dns64_ip))
 
         send('END')
