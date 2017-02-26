@@ -16,5 +16,4 @@ Configure in `pdns.conf` like so:
 
     launch=pipe
     pipe-command=/srv/dns/arbitrary-dns64-generator dns64.example.com ns1.example.com dns@example.com
-    pipe-regex=^.*\.dns64\.example\.com$
-
+    pipe-regex=^(.*\.dns64\.example\.com|dns64\.example\.com)$
